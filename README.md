@@ -23,7 +23,7 @@ Go (plan JSON parser) + composite GitHub Action; go-github for PR comments.
 ## Usage
 
 ```bash
-- uses: moveeeax/tf-plan-summary@v1
+- uses: cybercapybara/tf-plan-summary@v1
   with:
     plan-json: plan.json
     github-token: ${{ secrets.GITHUB_TOKEN }}
