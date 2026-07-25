@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version: ["1.22", "1.23"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Verify formatting
+        run: test -z "$(gofmt -l .)"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Build
+        run: go build -o /tmp/tf-plan-summary .
+
+      - name: Smoke-test (render fixture)
+        run: |
+          out=$(/tmp/tf-plan-summary --plan-json testdata/plan.json)
+          echo "$out"
+          echo "$out" | grep -q '\*\*2\*\* to add'
+          echo "$out" | grep -q '1 to destroy'
+          echo "$out" | grep -q '<details>'

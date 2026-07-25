@@ -1,0 +1,30 @@
+# Example: summarize a Terraform plan on every PR.
+# Copy into .github/workflows/ and adjust the plan step to your setup.
+name: terraform-plan
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write   # required to post the sticky comment
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform plan → JSON
+        run: |
+          terraform init -input=false
+          terraform plan -out=plan.bin -input=false
+          terraform show -json plan.bin > plan.json
+
+      - name: Summarize plan on the PR
+        uses: moveeeax/tf-plan-summary@v1
+        with:
+          plan-json: plan.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}

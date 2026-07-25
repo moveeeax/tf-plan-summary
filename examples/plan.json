@@ -1,0 +1,40 @@
+{
+  "format_version": "1.2",
+  "resource_changes": [
+    {
+      "address": "aws_s3_bucket.logs",
+      "type": "aws_s3_bucket",
+      "change": { "actions": ["create"] }
+    },
+    {
+      "address": "aws_iam_role.app",
+      "type": "aws_iam_role",
+      "change": { "actions": ["update"] }
+    },
+    {
+      "address": "aws_instance.web",
+      "type": "aws_instance",
+      "change": { "actions": ["create", "delete"] }
+    },
+    {
+      "address": "aws_db_instance.legacy",
+      "type": "aws_db_instance",
+      "change": { "actions": ["delete"] }
+    },
+    {
+      "address": "aws_security_group.sg",
+      "type": "aws_security_group",
+      "change": { "actions": ["no-op"] }
+    },
+    {
+      "address": "data.aws_ami.ubuntu",
+      "type": "aws_ami",
+      "change": { "actions": ["read"] }
+    },
+    {
+      "address": "aws_s3_bucket.assets",
+      "type": "aws_s3_bucket",
+      "change": { "actions": ["create"] }
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+name: tf-plan-summary
+description: Post a human-readable Terraform plan summary as a sticky PR comment.
+branding:
+  icon: file-text
+  color: purple
+
+inputs:
+  plan-json:
+    description: Path to `terraform show -json` output.
+    required: true
+  github-token:
+    description: Token used to post the PR comment (usually secrets.GITHUB_TOKEN).
+    required: true
+  marker:
+    description: Hidden marker identifying the sticky comment.
+    required: false
+    default: "<!-- tf-plan-summary -->"
+  version:
+    description: tf-plan-summary version to install (git ref).
+    required: false
+    default: latest
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: "1.22"
+
+    - name: Install tf-plan-summary
+      shell: bash
+      run: go install github.com/moveeeax/tf-plan-summary@${{ inputs.version }}
+
+    - name: Post plan summary
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        "$(go env GOPATH)/bin/tf-plan-summary" \
+          --plan-json "${{ inputs.plan-json }}" \
+          --marker "${{ inputs.marker }}"
