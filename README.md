@@ -28,12 +28,32 @@ plan, not a pile of stale ones.
 
 ## What it does
 
-- Parses `terraform show -json plan.bin` into per-resource actions.
-- Classifies each as **create / update / replace / destroy** (a create+delete pair,
-  in either order, is a replacement), ignoring `no-op` and `read`.
+- Parses `terraform show -json plan.bin` into per-resource actions, across nested
+  modules and `count`/`for_each` instances.
+- Classifies each as **create / update / replace / destroy / forget** (a
+  create+delete pair, in either order — the default and the `create_before_destroy`
+  ordering — is a replacement), ignoring `no-op` and `read`.
 - Renders counts, a collapsible details table, and a **risk callout** whenever the
-  plan replaces or destroys anything.
-- Exit code stays `0` for a clean render; wire the threshold gate in CI as you like.
+  plan replaces, destroys, or forgets anything.
+- Emits machine-readable counts (`--stats-json`, `$GITHUB_OUTPUT`) so a workflow can
+  gate on `has-risk` instead of grepping Markdown.
+
+It is deliberately conservative about under-reporting:
+
+- Only `address`, `type` and `actions` are read from the plan. Values,
+  `before`/`after` and `sensitive_values` are never parsed, so nothing from them
+  can end up in a PR comment.
+- An actions array it does not recognise is reported as `unclassified` rather than
+  silently treated as a no-op.
+- Input that is not a plan document (a state file from `terraform show -json`, a
+  truncated download, an unrelated JSON file) is an **error**, never a reassuring
+  "No changes".
+- Resource addresses are escaped before they go into the Markdown table, so a
+  `for_each` key containing pipes, backticks or newlines cannot break the table or
+  hide the rows below it.
+- A plan too large for GitHub's 65536-character comment limit has its table
+  truncated — destroys and replacements first, everything else after — and the
+  omission is stated in the comment. The counts are always complete.
 
 ## Use it as a GitHub Action
 
@@ -58,6 +78,43 @@ steps:
 The action finds its previous comment by a hidden marker and edits it, so re-runs
 never spam the thread. See [`examples/`](examples/) for a full workflow.
 
+### Action inputs
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `plan-json` | yes | — | Path to `terraform show -json` output |
+| `github-token` | yes | — | Token used to post the comment |
+| `marker` | no | `<!-- tf-plan-summary -->` | Hidden marker identifying the sticky comment |
+| `pr-number` | no | the triggering PR | Set explicitly on non-`pull_request` triggers |
+| `version` | no | `latest` | Git ref of the CLI to install |
+| `go-version` | no | `stable` | Go toolchain used to install the CLI |
+
+### Action outputs
+
+| Output | Example | Description |
+|--------|---------|-------------|
+| `create` / `update` / `replace` / `destroy` / `forget` | `3` | Per-action resource counts |
+| `unknown` | `0` | Changes this version could not classify |
+| `total` | `7` | All changes except `no-op` and `read` |
+| `has-risk` | `true` | Anything replaced, destroyed, or forgotten |
+| `summary-file` | `/home/runner/work/_temp/tf-plan-summary.md` | The rendered Markdown |
+
+Gate a job on the plan instead of eyeballing it:
+
+```yaml
+- uses: moveeeax/tf-plan-summary@v1
+  id: summary
+  with:
+    plan-json: plan.json
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+
+- name: Require approval for destructive plans
+  if: steps.summary.outputs.has-risk == 'true'
+  run: |
+    echo "Plan destroys ${{ steps.summary.outputs.destroy }} and replaces ${{ steps.summary.outputs.replace }} resources."
+    exit 1
+```
+
 ## Use it as a CLI
 
 ```bash
@@ -74,6 +131,8 @@ tf-plan-summary --plan-json plan.json --repo owner/name --pr 42 --github-token "
 |------|---------|-------------|
 | `--plan-json` | — | Path to `terraform show -json` output (required) |
 | `-o`, `--output` | `-` | Write Markdown to a file instead of stdout |
+| `--stats-json` | — | Write machine-readable counts to this JSON file |
+| `--github-output` | `$GITHUB_OUTPUT` | Append `key=value` step outputs to this file |
 | `--marker` | `<!-- tf-plan-summary -->` | Hidden marker identifying the sticky comment |
 | `--github-token` | `$GITHUB_TOKEN` | Token for posting the comment |
 | `--repo` | `$GITHUB_REPOSITORY` | `owner/name` of the repository |

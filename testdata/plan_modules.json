@@ -1,0 +1,81 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.0",
+  "planned_values": { "root_module": {} },
+  "resource_changes": [
+    {
+      "address": "module.network.module.subnets.aws_subnet.this[0]",
+      "module_address": "module.network.module.subnets",
+      "type": "aws_subnet",
+      "name": "this",
+      "index": 0,
+      "change": { "actions": ["delete"] }
+    },
+    {
+      "address": "module.network.module.subnets.aws_subnet.this[1]",
+      "module_address": "module.network.module.subnets",
+      "type": "aws_subnet",
+      "name": "this",
+      "index": 1,
+      "change": { "actions": ["delete", "create"] }
+    },
+    {
+      "address": "module.db.aws_db_instance.primary",
+      "module_address": "module.db",
+      "type": "aws_db_instance",
+      "name": "primary",
+      "change": {
+        "actions": ["create", "delete"],
+        "before": { "password": "hunter2-before" },
+        "after": { "password": "hunter2-after" },
+        "before_sensitive": { "password": true },
+        "after_sensitive": { "password": true },
+        "sensitive_values": { "password": true, "master_user_secret": true }
+      },
+      "action_reason": "replace_because_cannot_update"
+    },
+    {
+      "address": "module.storage.aws_s3_bucket.this[\"eu-west-1|primary\"]",
+      "module_address": "module.storage",
+      "type": "aws_s3_bucket",
+      "name": "this",
+      "index": "eu-west-1|primary",
+      "change": { "actions": ["update"] }
+    },
+    {
+      "address": "module.legacy.aws_instance.pet",
+      "module_address": "module.legacy",
+      "type": "aws_instance",
+      "name": "pet",
+      "change": { "actions": ["forget"] }
+    },
+    {
+      "address": "module.app.aws_instance.worker[0]",
+      "module_address": "module.app",
+      "type": "aws_instance",
+      "name": "worker",
+      "index": 0,
+      "deposed": "5ce2b3f1",
+      "change": { "actions": ["delete"] }
+    },
+    {
+      "address": "module.app.aws_instance.worker[0]",
+      "module_address": "module.app",
+      "type": "aws_instance",
+      "name": "worker",
+      "index": 0,
+      "change": { "actions": ["create"] }
+    },
+    {
+      "address": "data.aws_caller_identity.current",
+      "type": "aws_caller_identity",
+      "change": { "actions": ["read"] }
+    },
+    {
+      "address": "module.network.aws_vpc.this",
+      "module_address": "module.network",
+      "type": "aws_vpc",
+      "change": { "actions": ["no-op"] }
+    }
+  ]
+}

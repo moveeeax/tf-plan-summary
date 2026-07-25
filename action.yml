@@ -15,10 +15,50 @@ inputs:
     description: Hidden marker identifying the sticky comment.
     required: false
     default: "<!-- tf-plan-summary -->"
+  pr-number:
+    description: >-
+      Pull request to comment on. Defaults to the PR that triggered the run; set
+      it explicitly on triggers other than `pull_request`. When it is empty the
+      summary is still rendered, but no comment is posted.
+    required: false
+    default: ${{ github.event.pull_request.number }}
   version:
     description: tf-plan-summary version to install (git ref).
     required: false
     default: latest
+  go-version:
+    description: Go toolchain used to install the CLI.
+    required: false
+    default: stable
+
+outputs:
+  summary-file:
+    description: Path to the rendered Markdown summary.
+    value: ${{ steps.summary.outputs.summary-file }}
+  create:
+    description: Number of resources to create.
+    value: ${{ steps.summary.outputs.create }}
+  update:
+    description: Number of resources to update in place.
+    value: ${{ steps.summary.outputs.update }}
+  replace:
+    description: Number of resources to replace (create+delete, either ordering).
+    value: ${{ steps.summary.outputs.replace }}
+  destroy:
+    description: Number of resources to destroy.
+    value: ${{ steps.summary.outputs.destroy }}
+  forget:
+    description: Number of resources to drop from state without destroying.
+    value: ${{ steps.summary.outputs.forget }}
+  unknown:
+    description: Number of changes this version could not classify.
+    value: ${{ steps.summary.outputs.unknown }}
+  total:
+    description: Total changes (excludes no-op and read).
+    value: ${{ steps.summary.outputs.total }}
+  has-risk:
+    description: "`true` when the plan replaces, destroys, or forgets anything."
+    value: ${{ steps.summary.outputs.has-risk }}
 
 runs:
   using: composite
@@ -26,19 +66,35 @@ runs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: "1.22"
+        go-version: ${{ inputs.go-version }}
 
     - name: Install tf-plan-summary
       shell: bash
-      run: go install github.com/moveeeax/tf-plan-summary@${{ inputs.version }}
+      env:
+        VERSION: ${{ inputs.version }}
+      run: go install "github.com/moveeeax/tf-plan-summary@${VERSION}"
 
+    # Inputs are passed through the environment rather than interpolated into
+    # the script, so a value containing shell metacharacters cannot run as code.
     - name: Post plan summary
+      id: summary
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         GITHUB_REPOSITORY: ${{ github.repository }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        PLAN_JSON: ${{ inputs.plan-json }}
+        MARKER: ${{ inputs.marker }}
       run: |
+        set -euo pipefail
+        summary="${RUNNER_TEMP}/tf-plan-summary.md"
+        if [ -z "${PR_NUMBER}" ]; then
+          echo "::warning title=tf-plan-summary::No pull request number available; rendering the summary without posting a comment."
+        fi
+        # The CLI appends its step outputs to $GITHUB_OUTPUT itself.
         "$(go env GOPATH)/bin/tf-plan-summary" \
-          --plan-json "${{ inputs.plan-json }}" \
-          --marker "${{ inputs.marker }}"
+          --plan-json "${PLAN_JSON}" \
+          --marker "${MARKER}" \
+          --output "${summary}"
+        cat "${summary}" >> "${GITHUB_STEP_SUMMARY}"
+        cat "${summary}"
