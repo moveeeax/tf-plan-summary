@@ -24,7 +24,20 @@ jobs:
           terraform show -json plan.bin > plan.json
 
       - name: Summarize plan on the PR
+        id: summary
         uses: moveeeax/tf-plan-summary@v1
         with:
           plan-json: plan.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Optional gate: fail the job when the plan replaces, destroys or forgets
+      # anything, so a destructive plan cannot be merged unnoticed.
+      - name: Flag destructive plans
+        if: steps.summary.outputs.has-risk == 'true'
+        env:
+          DESTROY: ${{ steps.summary.outputs.destroy }}
+          REPLACE: ${{ steps.summary.outputs.replace }}
+          FORGET: ${{ steps.summary.outputs.forget }}
+        run: |
+          echo "::error::Plan destroys ${DESTROY}, replaces ${REPLACE}, forgets ${FORGET} resource(s)."
+          exit 1

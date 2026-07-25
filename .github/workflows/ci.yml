@@ -39,3 +39,23 @@ jobs:
           echo "$out" | grep -q '\*\*2\*\* to add'
           echo "$out" | grep -q '1 to destroy'
           echo "$out" | grep -q '<details>'
+
+      - name: Smoke-test (a state document must not render as "no changes")
+        run: |
+          echo '{"format_version":"1.0","values":{"root_module":{}}}' > /tmp/state.json
+          if /tmp/tf-plan-summary --plan-json /tmp/state.json; then
+            echo "expected a failure for a non-plan document"; exit 1
+          fi
+
+      - name: action.yml outputs match the CLI
+        run: |
+          raw=$(mktemp); emitted=$(mktemp); declared=$(mktemp)
+          GITHUB_OUTPUT="$raw" /tmp/tf-plan-summary \
+            --plan-json testdata/plan_modules.json --output /dev/null
+          cut -d= -f1 "$raw" | sort -u > "$emitted"
+          grep -o 'steps\.summary\.outputs\.[a-z-]*' action.yml \
+            | sed 's/.*outputs\.//' | sort -u > "$declared"
+          missing=$(comm -23 "$declared" "$emitted")
+          if [ -n "$missing" ]; then
+            echo "action.yml declares outputs the CLI never emits:"; echo "$missing"; exit 1
+          fi
