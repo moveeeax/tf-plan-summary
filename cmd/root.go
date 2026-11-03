@@ -83,7 +83,10 @@ func newRootCmd() *cobra.Command {
 				return fmt.Errorf("invalid --repo %q, want owner/name", repo)
 			}
 			ctx := context.Background()
-			c := comment.NewGitHubCommenter(ctx, nil, token, owner, name, prNumber)
+			c, err := comment.NewGitHubCommenter(ctx, nil, token, owner, name, prNumber)
+			if err != nil {
+				return err
+			}
 			res, err := comment.Upsert(ctx, c, marker, body)
 			if err != nil {
 				return err
