@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/google/go-github/v63/github"
+	"github.com/google/go-github/v93/github"
 )
 
 // GitHubCommenter implements Commenter against a real repository PR using the
@@ -17,10 +17,18 @@ type GitHubCommenter struct {
 }
 
 // NewGitHubCommenter builds a Commenter for owner/repo#number authenticated with
-// token (typically the Actions GITHUB_TOKEN).
-func NewGitHubCommenter(ctx context.Context, hc *http.Client, token, owner, repo string, number int) *GitHubCommenter {
-	client := github.NewClient(hc).WithAuthToken(token)
-	return &GitHubCommenter{client: client, owner: owner, repo: repo, number: number}
+// token (typically the Actions GITHUB_TOKEN). A nil hc selects a default
+// http.Client.
+func NewGitHubCommenter(ctx context.Context, hc *http.Client, token, owner, repo string, number int) (*GitHubCommenter, error) {
+	opts := []github.ClientOptionsFunc{github.WithAuthToken(token)}
+	if hc != nil {
+		opts = append(opts, github.WithHTTPClient(hc))
+	}
+	client, err := github.NewClient(opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &GitHubCommenter{client: client, owner: owner, repo: repo, number: number}, nil
 }
 
 func (g *GitHubCommenter) List(ctx context.Context) ([]Comment, error) {
@@ -43,7 +51,7 @@ func (g *GitHubCommenter) List(ctx context.Context) ([]Comment, error) {
 }
 
 func (g *GitHubCommenter) Create(ctx context.Context, body string) (Comment, error) {
-	c, _, err := g.client.Issues.CreateComment(ctx, g.owner, g.repo, g.number, &github.IssueComment{Body: &body})
+	c, _, err := g.client.Issues.CreateComment(ctx, g.owner, g.repo, g.number, github.IssueCommentRequest{Body: body})
 	if err != nil {
 		return Comment{}, err
 	}
@@ -51,7 +59,7 @@ func (g *GitHubCommenter) Create(ctx context.Context, body string) (Comment, err
 }
 
 func (g *GitHubCommenter) Update(ctx context.Context, id int64, body string) (Comment, error) {
-	c, _, err := g.client.Issues.EditComment(ctx, g.owner, g.repo, id, &github.IssueComment{Body: &body})
+	c, _, err := g.client.Issues.UpdateComment(ctx, g.owner, g.repo, id, github.IssueCommentRequest{Body: body})
 	if err != nil {
 		return Comment{}, err
 	}

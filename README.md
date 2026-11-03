@@ -1,7 +1,7 @@
 # tf-plan-summary
 
 [![ci](https://github.com/moveeeax/tf-plan-summary/actions/workflows/ci.yml/badge.svg)](https://github.com/moveeeax/tf-plan-summary/actions/workflows/ci.yml)
-[![go](https://img.shields.io/badge/go-1.22%2B-00ADD8)](https://go.dev)
+[![go](https://img.shields.io/badge/go-1.26%2B-00ADD8)](https://go.dev)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 > Turn noisy `terraform plan` output into a clean, reviewable PR comment.
@@ -63,8 +63,8 @@ permissions:
   pull-requests: write
 
 steps:
-  - uses: actions/checkout@v4
-  - uses: hashicorp/setup-terraform@v3
+  - uses: actions/checkout@v7
+  - uses: hashicorp/setup-terraform@v4
   - run: |
       terraform init -input=false
       terraform plan -out=plan.bin -input=false
