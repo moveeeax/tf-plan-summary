@@ -76,10 +76,69 @@ func riskParts(s plan.Summary) []string {
 	return out
 }
 
+// maxWhyPaths caps the attribute paths listed in one "Why" cell; a resource
+// replaced because of dozens of nested blocks would otherwise swamp the table.
+const maxWhyPaths = 5
+
+// reasonText describes Terraform's action_reason codes. Unknown codes (newer
+// Terraform versions add them) are shown verbatim.
+var reasonText = map[string]string{
+	"replace_because_tainted":           "tainted",
+	"replace_by_request":                "replace requested (`-replace`)",
+	"replace_by_triggers":               "`replace_triggered_by`",
+	"replace_because_cannot_update":     "cannot update in place",
+	"delete_because_no_resource_config": "removed from configuration",
+	"delete_because_no_module":          "module instance removed",
+	"delete_because_wrong_repetition":   "count/for_each mode changed",
+	"delete_because_count_index":        "count index out of range",
+	"delete_because_each_key":           "for_each key removed",
+}
+
+// why explains a replace or destroy row from attribute paths and the reason
+// code only, never from values. Other actions get no explanation.
+func why(c plan.ResourceChange) string {
+	if c.Action != plan.Replace && c.Action != plan.Destroy {
+		return ""
+	}
+	if c.Action == plan.Replace && len(c.ReplacePaths) > 0 {
+		paths := c.ReplacePaths
+		more := ""
+		if len(paths) > maxWhyPaths {
+			more = fmt.Sprintf(" and %d more", len(paths)-maxWhyPaths)
+			paths = paths[:maxWhyPaths]
+		}
+		spans := make([]string, len(paths))
+		for i, p := range paths {
+			spans[i] = code(p)
+		}
+		return "forces replacement: " + strings.Join(spans, ", ") + more
+	}
+	if c.Action == plan.Destroy && c.Deposed {
+		return "deposed object"
+	}
+	if c.Reason == "" {
+		return ""
+	}
+	if t, ok := reasonText[c.Reason]; ok {
+		return t
+	}
+	return code(c.Reason)
+}
+
 func writeTable(b *strings.Builder, changes []plan.ResourceChange) {
+	whys := make([]string, len(changes))
+	withWhy := false
+	for i, c := range changes {
+		whys[i] = why(c)
+		withWhy = withWhy || whys[i] != ""
+	}
 	rows := make([]string, len(changes))
 	for i, c := range changes {
-		rows[i] = fmt.Sprintf("| %s %s | %s | %s |\n", symbol[c.Action], c.Action, code(c.Address), code(c.Type))
+		rows[i] = fmt.Sprintf("| %s %s | %s | %s |", symbol[c.Action], c.Action, code(c.Address), code(c.Type))
+		if withWhy {
+			rows[i] += " " + whys[i] + " |"
+		}
+		rows[i] += "\n"
 	}
 	keep, shown := selectRows(changes, rows, MaxBodyBytes-b.Len()-truncationReserve)
 
@@ -88,7 +147,11 @@ func writeTable(b *strings.Builder, changes []plan.ResourceChange) {
 	} else {
 		fmt.Fprintf(b, "<details>\n<summary>Details (showing %d of %d resources)</summary>\n\n", shown, len(rows))
 	}
-	b.WriteString("| Action | Resource | Type |\n|--------|----------|------|\n")
+	if withWhy {
+		b.WriteString("| Action | Resource | Type | Why |\n|--------|----------|------|-----|\n")
+	} else {
+		b.WriteString("| Action | Resource | Type |\n|--------|----------|------|\n")
+	}
 	for i, row := range rows {
 		if keep[i] {
 			b.WriteString(row)

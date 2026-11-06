@@ -202,3 +202,78 @@ func TestMarkdownNoRiskNoCallout(t *testing.T) {
 		t.Errorf("create-only plan should not show a risk callout:\n%s", md)
 	}
 }
+
+func TestMarkdownWhyColumn(t *testing.T) {
+	s := plan.Summary{
+		Changes: []plan.ResourceChange{
+			{Address: "aws_s3_bucket.logs", Type: "aws_s3_bucket", Action: plan.Create},
+			{Address: "aws_db_instance.main", Type: "aws_db_instance", Action: plan.Replace,
+				Reason: "replace_because_cannot_update", ReplacePaths: []string{"engine_version", "identifier"}},
+			{Address: "aws_instance.web", Type: "aws_instance", Action: plan.Replace, Reason: "replace_because_tainted"},
+			{Address: "aws_instance.api", Type: "aws_instance", Action: plan.Replace, Reason: "replace_by_request"},
+			{Address: "aws_instance.old", Type: "aws_instance", Action: plan.Destroy, Deposed: true},
+			{Address: "aws_instance.gone", Type: "aws_instance", Action: plan.Destroy, Reason: "delete_because_each_key"},
+			{Address: "aws_instance.new", Type: "aws_instance", Action: plan.Destroy, Reason: "delete_because_something_new"},
+		},
+		Counts: map[plan.Action]int{plan.Create: 1, plan.Replace: 3, plan.Destroy: 3},
+	}
+	md := Markdown(s, DefaultMarker)
+	for _, sub := range []string{
+		"| Action | Resource | Type | Why |",
+		"| forces replacement: `engine_version`, `identifier` |",
+		"| tainted |",
+		"| replace requested (`-replace`) |",
+		"| deposed object |",
+		"| for_each key removed |",
+		// A reason code this version does not know is shown as is.
+		"| `delete_because_something_new` |",
+	} {
+		if !strings.Contains(md, sub) {
+			t.Errorf("markdown missing %q\n---\n%s", sub, md)
+		}
+	}
+	// Every row keeps the same number of cells.
+	for _, line := range strings.Split(md, "\n") {
+		if strings.HasPrefix(line, "| ") && len(splitCells(line)) != 6 {
+			t.Errorf("row has %d cells, want 6: %q", len(splitCells(line)), line)
+		}
+	}
+}
+
+func TestMarkdownWhyCapsPaths(t *testing.T) {
+	paths := []string{"a", "b", "c", "d", "e", "f", "g"}
+	s := plan.Summary{
+		Changes: []plan.ResourceChange{{Address: "x.y", Type: "x", Action: plan.Replace, ReplacePaths: paths}},
+		Counts:  map[plan.Action]int{plan.Replace: 1},
+	}
+	md := Markdown(s, DefaultMarker)
+	if !strings.Contains(md, "`e` and 2 more |") || strings.Contains(md, "`f`") {
+		t.Errorf("paths not capped:\n%s", md)
+	}
+}
+
+// Without anything to explain the table keeps its three columns.
+func TestMarkdownNoWhyColumnWithoutReasons(t *testing.T) {
+	md := Markdown(sample(), DefaultMarker)
+	if strings.Contains(md, "Why") {
+		t.Errorf("unexpected Why column:\n%s", md)
+	}
+}
+
+// A hostile attribute path (a map key in replace_paths) is escaped like an address.
+func TestMarkdownWhyEscapesPaths(t *testing.T) {
+	s := plan.Summary{
+		Changes: []plan.ResourceChange{{Address: "x.y", Type: "x", Action: plan.Replace,
+			ReplacePaths: []string{"tags[\"a|b`\n</details>\"]"}}},
+		Counts: map[plan.Action]int{plan.Replace: 1},
+	}
+	md := Markdown(s, DefaultMarker)
+	for _, line := range strings.Split(md, "\n") {
+		if strings.HasPrefix(line, "| ± replace") && len(splitCells(line)) != 6 {
+			t.Errorf("hostile path broke the row: %q", line)
+		}
+	}
+	if !strings.HasSuffix(md, "</details>\n") || !strings.Contains(md, `\|`) {
+		t.Errorf("hostile path not escaped:\n%s", md)
+	}
+}

@@ -9,7 +9,8 @@
       "type": "aws_subnet",
       "name": "this",
       "index": 0,
-      "change": { "actions": ["delete"] }
+      "change": { "actions": ["delete"] },
+      "action_reason": "delete_because_count_index"
     },
     {
       "address": "module.network.module.subnets.aws_subnet.this[1]",
@@ -17,7 +18,8 @@
       "type": "aws_subnet",
       "name": "this",
       "index": 1,
-      "change": { "actions": ["delete", "create"] }
+      "change": { "actions": ["delete", "create"] },
+      "action_reason": "replace_because_tainted"
     },
     {
       "address": "module.db.aws_db_instance.primary",
@@ -30,7 +32,8 @@
         "after": { "password": "hunter2-after" },
         "before_sensitive": { "password": true },
         "after_sensitive": { "password": true },
-        "sensitive_values": { "password": true, "master_user_secret": true }
+        "sensitive_values": { "password": true, "master_user_secret": true },
+        "replace_paths": [["identifier"], ["engine_version"], ["identifier"]]
       },
       "action_reason": "replace_because_cannot_update"
     },

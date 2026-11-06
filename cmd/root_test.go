@@ -156,3 +156,15 @@ func TestSplitRepo(t *testing.T) {
 		t.Error("expected splitRepo to reject bad input")
 	}
 }
+
+func TestRunExplainsReplacements(t *testing.T) {
+	out, err := run(t, "--plan-json", "../testdata/plan_modules.json")
+	if err != nil {
+		t.Fatalf("execute: %v\n%s", err, out)
+	}
+	for _, sub := range []string{"| Why |", "forces replacement: `engine_version`, `identifier`", "tainted"} {
+		if !strings.Contains(out, sub) {
+			t.Errorf("output missing %q:\n%s", sub, out)
+		}
+	}
+}

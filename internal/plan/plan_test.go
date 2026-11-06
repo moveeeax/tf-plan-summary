@@ -201,3 +201,51 @@ func TestParseInvalid(t *testing.T) {
 		t.Fatal("expected error on invalid JSON")
 	}
 }
+
+// replace_paths and action_reason explain a replacement; only attribute paths
+// and the reason code are kept, never a value.
+func TestParseReplaceReasons(t *testing.T) {
+	data, err := os.ReadFile("../../testdata/plan_modules.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	byKey := map[string]ResourceChange{}
+	for _, c := range s.Changes {
+		byKey[c.Address+"/"+string(c.Action)] = c
+	}
+	db := byKey["module.db.aws_db_instance.primary/replace"]
+	if got := strings.Join(db.ReplacePaths, ","); got != "engine_version,identifier" {
+		t.Errorf("db replace paths = %q, want sorted and de-duplicated engine_version,identifier", got)
+	}
+	if db.Reason != "replace_because_cannot_update" {
+		t.Errorf("db reason = %q", db.Reason)
+	}
+	if r := byKey["module.network.module.subnets.aws_subnet.this[1]/replace"].Reason; r != "replace_because_tainted" {
+		t.Errorf("tainted subnet reason = %q", r)
+	}
+	if c := byKey["module.app.aws_instance.worker[0]/destroy"]; !c.Deposed {
+		t.Error("deposed destroy not marked as deposed")
+	}
+	if c := byKey["module.app.aws_instance.worker[0]/create"]; c.Deposed {
+		t.Error("current object marked as deposed")
+	}
+}
+
+func TestFormatPaths(t *testing.T) {
+	in := [][]any{
+		{"ebs_block_device", float64(0), "volume_size"},
+		{"tags", "Cost Center"},
+		{"name"},
+		{"name"},
+		{},
+	}
+	want := []string{"ebs_block_device[0].volume_size", "name", `tags["Cost Center"]`}
+	got := formatPaths(in)
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("formatPaths = %q, want %q", got, want)
+	}
+}
