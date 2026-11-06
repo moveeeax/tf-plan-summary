@@ -50,6 +50,14 @@ jobs:
             echo "expected a failure for a non-plan document"; exit 1
           fi
 
+      - name: Smoke-test (fail-on critical exits 2 on a protected replace)
+        run: |
+          rc=0
+          /tmp/tf-plan-summary --plan-json testdata/plan_modules.json --output /dev/null \
+            --protect aws_db_instance --fail-on critical || rc=$?
+          test "$rc" -eq 2
+          /tmp/tf-plan-summary --plan-json testdata/plan_modules.json --output /dev/null --fail-on critical
+
       - name: action.yml outputs match the CLI
         run: |
           raw=$(mktemp); emitted=$(mktemp); declared=$(mktemp)

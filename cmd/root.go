@@ -26,6 +26,9 @@ func newRootCmd() *cobra.Command {
 		token     string
 		repo      string
 		prNumber  int
+		protect   []string
+		ignore    []string
+		failOn    string
 	)
 
 	root := &cobra.Command{
@@ -39,6 +42,13 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !validFailOn(failOn) {
+				return fmt.Errorf("invalid --fail-on %q, want risk, critical or never", failOn)
+			}
+			policy := plan.Policy{Protect: protect, IgnoreRisk: ignore}
+			if err := policy.Validate(); err != nil {
+				return err
+			}
 			data, err := os.ReadFile(planPath)
 			if err != nil {
 				return fmt.Errorf("read plan json: %w", err)
@@ -47,6 +57,7 @@ func newRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			summary.Apply(policy)
 			body := render.Markdown(summary, marker)
 
 			// Write/print the rendered Markdown.
@@ -74,9 +85,10 @@ func newRootCmd() *cobra.Command {
 				}
 			}
 
-			// Post the sticky comment only when fully configured.
+			// Post the sticky comment only when fully configured. The gate is
+			// checked last, so a failing plan still gets its comment.
 			if token == "" || repo == "" || prNumber == 0 {
-				return nil
+				return gate(failOn, stats)
 			}
 			owner, name, ok := splitRepo(repo)
 			if !ok {
@@ -92,7 +104,7 @@ func newRootCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "sticky comment %s (id %d)\n", res.Action, res.ID)
-			return nil
+			return gate(failOn, stats)
 		},
 	}
 
@@ -105,8 +117,37 @@ func newRootCmd() *cobra.Command {
 	root.Flags().StringVar(&token, "github-token", os.Getenv("GITHUB_TOKEN"), "GitHub token for posting the comment")
 	root.Flags().StringVar(&repo, "repo", os.Getenv("GITHUB_REPOSITORY"), "owner/name of the repository")
 	root.Flags().IntVar(&prNumber, "pr", envInt("PR_NUMBER"), "pull request number to comment on")
+	root.Flags().StringArrayVar(&protect, "protect", nil,
+		"glob of protected resources, matched against the address, the type, or the address inside its module (repeatable)")
+	root.Flags().StringArrayVar(&ignore, "ignore-risk", nil,
+		"glob of resources whose replace/destroy/forget does not count as risk (repeatable; --protect wins)")
+	root.Flags().StringVar(&failOn, "fail-on", "never",
+		"exit with status 2 on: risk (has-risk), critical (has-critical-risk), or never")
 	_ = root.MarkFlagRequired("plan-json")
 	return root
+}
+
+// GateError is returned when --fail-on trips. main exits with status 2 for it,
+// so a workflow can tell a gated plan from a failed run.
+type GateError struct{ Reason string }
+
+func (e *GateError) Error() string { return "plan gate: " + e.Reason }
+
+func validFailOn(s string) bool {
+	return s == "risk" || s == "critical" || s == "never"
+}
+
+// gate turns the --fail-on setting and the plan's stats into an error.
+func gate(failOn string, st plan.Stats) error {
+	switch {
+	case failOn == "critical" && st.HasCriticalRisk:
+		return &GateError{fmt.Sprintf("the plan destroys %d and replaces %d protected resource(s)",
+			st.ProtectedDestroy, st.ProtectedReplace)}
+	case failOn == "risk" && st.HasRisk:
+		return &GateError{fmt.Sprintf("the plan replaces %d, destroys %d and forgets %d resource(s)",
+			st.Replace, st.Destroy, st.Forget)}
+	}
+	return nil
 }
 
 // writeStatsJSON writes the counts as a small JSON object.
@@ -134,6 +175,9 @@ func writeGitHubOutput(path string, st plan.Stats, summaryFile string) error {
 	fmt.Fprintf(&b, "unknown=%d\n", st.Unknown)
 	fmt.Fprintf(&b, "total=%d\n", st.Total)
 	fmt.Fprintf(&b, "has-risk=%t\n", st.HasRisk)
+	fmt.Fprintf(&b, "protected-destroy=%d\n", st.ProtectedDestroy)
+	fmt.Fprintf(&b, "protected-replace=%d\n", st.ProtectedReplace)
+	fmt.Fprintf(&b, "has-critical-risk=%t\n", st.HasCriticalRisk)
 	if summaryFile != "" && !strings.ContainsAny(summaryFile, "\r\n") {
 		fmt.Fprintf(&b, "summary-file=%s\n", summaryFile)
 	}
