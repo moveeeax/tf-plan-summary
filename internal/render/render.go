@@ -57,19 +57,53 @@ func Markdown(s plan.Summary, marker string) string {
 	}
 	fmt.Fprintf(&b, "%s.\n\n", strings.Join(parts, ", "))
 
+	if s.HasCriticalRisk() {
+		writeCriticalCallout(&b, s)
+	}
 	if s.HasRisk() {
 		fmt.Fprintf(&b, "> ⚠️ **Review carefully:** %s.\n\n", strings.Join(riskParts(s), ", "))
+	}
+	if n := s.RiskIgnored(); n > 0 {
+		fmt.Fprintf(&b, "_%d risky change(s) exempted by `--ignore-risk`; they are still listed below._\n\n", n)
 	}
 
 	writeTable(&b, s.Changes)
 	return b.String()
 }
 
-// riskParts lists the non-zero destructive counts for the callout.
+// maxCalloutAddresses caps the protected addresses named in the callout; the
+// table lists them all.
+const maxCalloutAddresses = 10
+
+// writeCriticalCallout names the protected resources a plan destroys or
+// replaces, above the ordinary risk callout.
+func writeCriticalCallout(b *strings.Builder, s plan.Summary) {
+	var parts, addrs []string
+	for _, a := range []plan.Action{plan.Replace, plan.Destroy} {
+		if n := s.ProtectedCount(a); n > 0 {
+			parts = append(parts, fmt.Sprintf("%d to %s", n, a))
+		}
+	}
+	for _, c := range s.Changes {
+		if c.Protected && (c.Action == plan.Destroy || c.Action == plan.Replace) {
+			addrs = append(addrs, code(c.Address))
+		}
+	}
+	more := ""
+	if len(addrs) > maxCalloutAddresses {
+		more = fmt.Sprintf(" and %d more", len(addrs)-maxCalloutAddresses)
+		addrs = addrs[:maxCalloutAddresses]
+	}
+	fmt.Fprintf(b, "> [!CAUTION]\n> **Protected resources at risk:** %s: %s%s.\n\n",
+		strings.Join(parts, ", "), strings.Join(addrs, ", "), more)
+}
+
+// riskParts lists the non-zero destructive counts for the callout, leaving out
+// changes a policy exempted from the risk gate.
 func riskParts(s plan.Summary) []string {
 	var out []string
 	for _, a := range []plan.Action{plan.Replace, plan.Destroy, plan.Forget} {
-		if n := s.Counts[a]; n > 0 {
+		if n := s.RiskCount(a); n > 0 {
 			out = append(out, fmt.Sprintf("%d to %s", n, a))
 		}
 	}
@@ -126,6 +160,12 @@ func why(c plan.ResourceChange) string {
 }
 
 func writeTable(b *strings.Builder, changes []plan.ResourceChange) {
+	// Protected rows are pinned to the top; the order within each group is
+	// kept.
+	changes = append([]plan.ResourceChange(nil), changes...)
+	sort.SliceStable(changes, func(i, j int) bool {
+		return changes[i].Protected && !changes[j].Protected
+	})
 	whys := make([]string, len(changes))
 	withWhy := false
 	for i, c := range changes {
@@ -134,7 +174,15 @@ func writeTable(b *strings.Builder, changes []plan.ResourceChange) {
 	}
 	rows := make([]string, len(changes))
 	for i, c := range changes {
-		rows[i] = fmt.Sprintf("| %s %s | %s | %s |", symbol[c.Action], c.Action, code(c.Address), code(c.Type))
+		lock := ""
+		if c.Protected {
+			lock = "🔒 "
+		}
+		exempt := ""
+		if c.RiskIgnored {
+			exempt = " (exempt)"
+		}
+		rows[i] = fmt.Sprintf("| %s%s %s%s | %s | %s |", lock, symbol[c.Action], c.Action, exempt, code(c.Address), code(c.Type))
 		if withWhy {
 			rows[i] += " " + whys[i] + " |"
 		}
@@ -175,7 +223,7 @@ func selectRows(changes []plan.ResourceChange, rows []string, budget int) (keep 
 		order[i] = i
 	}
 	sort.SliceStable(order, func(a, b int) bool {
-		return riskRank(changes[order[a]].Action) < riskRank(changes[order[b]].Action)
+		return riskRank(changes[order[a]]) < riskRank(changes[order[b]])
 	})
 	used := 0
 	for _, i := range order {
@@ -189,8 +237,12 @@ func selectRows(changes []plan.ResourceChange, rows []string, budget int) (keep 
 	return keep, shown
 }
 
-func riskRank(a plan.Action) int {
-	switch a {
+// riskRank orders rows for truncation: protected resources are dropped last.
+func riskRank(c plan.ResourceChange) int {
+	if c.Protected {
+		return -1
+	}
+	switch c.Action {
 	case plan.Destroy:
 		return 0
 	case plan.Replace:

@@ -41,6 +41,9 @@ plan, not a pile of stale ones.
   `removed from configuration`, `deposed object`, ...).
 - Emits machine-readable counts (`--stats-json`, `$GITHUB_OUTPUT`) so a workflow can
   gate on `has-risk` instead of grepping Markdown.
+- Applies a **risk policy**: `--protect` marks resources whose loss is critical,
+  `--ignore-risk` exempts ones whose recreation nobody cares about, and
+  `--fail-on` turns either into an exit code. See [Risk policy](#risk-policy).
 
 It is deliberately conservative about under-reporting:
 
@@ -91,6 +94,9 @@ never spam the thread. See [`examples/`](examples/) for a full workflow.
 | `github-token` | yes | — | Token used to post the comment |
 | `marker` | no | `<!-- tf-plan-summary -->` | Hidden marker identifying the sticky comment |
 | `pr-number` | no | the triggering PR | Set explicitly on non-`pull_request` triggers |
+| `protect` | no | — | Protected resources, one glob per line |
+| `ignore-risk` | no | — | Resources exempt from `has-risk`, one glob per line |
+| `fail-on` | no | `never` | Fail the step on `risk`, `critical`, or `never` |
 | `version` | no | `latest` | Git ref of the CLI to install |
 | `go-version` | no | `stable` | Go toolchain used to install the CLI |
 
@@ -101,7 +107,9 @@ never spam the thread. See [`examples/`](examples/) for a full workflow.
 | `create` / `update` / `replace` / `destroy` / `forget` | `3` | Per-action resource counts |
 | `unknown` | `0` | Changes this version could not classify |
 | `total` | `7` | All changes except `no-op` and `read` |
-| `has-risk` | `true` | Anything replaced, destroyed, or forgotten |
+| `has-risk` | `true` | Anything replaced, destroyed, or forgotten, minus `ignore-risk` exemptions |
+| `protected-destroy` / `protected-replace` | `1` | Protected resources destroyed / replaced |
+| `has-critical-risk` | `true` | A protected resource is destroyed or replaced |
 | `summary-file` | `/home/runner/work/_temp/tf-plan-summary.md` | The rendered Markdown |
 
 Gate a job on the plan instead of eyeballing it:
@@ -142,9 +150,51 @@ tf-plan-summary --plan-json plan.json --repo owner/name --pr 42 --github-token "
 | `--github-token` | `$GITHUB_TOKEN` | Token for posting the comment |
 | `--repo` | `$GITHUB_REPOSITORY` | `owner/name` of the repository |
 | `--pr` | `$PR_NUMBER` | Pull request number |
+| `--protect` | — | Glob of protected resources (repeatable) |
+| `--ignore-risk` | — | Glob of resources exempt from `has-risk` (repeatable) |
+| `--fail-on` | `never` | Exit with status 2 on `risk`, `critical`, or `never` |
 
 Comment posting happens only when token, repo, and PR number are all set;
 otherwise it just renders the Markdown.
+
+## Risk policy
+
+`has-risk` fires on any replacement, so a recreated `null_resource` blocks a PR just
+like a destroyed database would. A policy tells the two apart:
+
+```yaml
+- uses: moveeeax/tf-plan-summary@v1
+  with:
+    plan-json: plan.json
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    protect: |
+      aws_db_instance
+      aws_s3_bucket.state
+      module.data.*
+    ignore-risk: |
+      null_resource
+      terraform_data
+    fail-on: critical
+```
+
+Patterns are globs: `*` matches any run of characters (dots and brackets included),
+`?` matches one character, and everything else is literal, so `aws_instance.web[0]`
+needs no escaping. A pattern applies when it matches the full address
+(`module.db.aws_db_instance.main`), the resource type (`aws_db_instance`), or the
+address inside its module (`aws_db_instance.main`, which `aws_db_instance.*`
+matches in any module).
+
+- Protected rows are pinned to the top of the table with a 🔒, and a
+  `[!CAUTION]` callout names every protected resource that is destroyed or
+  replaced. `protected-destroy`, `protected-replace` and `has-critical-risk`
+  count them.
+- `--ignore-risk` takes a replacement, destroy or forget out of `has-risk` and
+  the "Review carefully" callout. The change is still counted, listed with
+  `(exempt)`, and the comment says how many were exempted.
+- When a resource matches both, `--protect` wins.
+- `--fail-on risk` fails on `has-risk`, `--fail-on critical` on
+  `has-critical-risk`. The exit status is 2, distinct from 1 for a real error, and
+  it comes after the comment, the step outputs and `--stats-json` are written.
 
 ## How it works
 

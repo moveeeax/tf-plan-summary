@@ -22,6 +22,25 @@ inputs:
       summary is still rendered, but no comment is posted.
     required: false
     default: ${{ github.event.pull_request.number }}
+  protect:
+    description: >-
+      Protected resources, one glob per line. A glob matches the full address,
+      the resource type, or the address inside its module, e.g.
+      `aws_db_instance` or `module.data.*`.
+    required: false
+    default: ""
+  ignore-risk:
+    description: >-
+      Resources whose replace/destroy/forget does not count towards `has-risk`,
+      one glob per line. `protect` wins when both match.
+    required: false
+    default: ""
+  fail-on:
+    description: >-
+      Fail the step on `risk` (has-risk), `critical` (a protected resource is
+      destroyed or replaced), or `never`. The comment is posted first.
+    required: false
+    default: never
   version:
     description: tf-plan-summary version to install (git ref).
     required: false
@@ -57,8 +76,17 @@ outputs:
     description: Total changes (excludes no-op and read).
     value: ${{ steps.summary.outputs.total }}
   has-risk:
-    description: "`true` when the plan replaces, destroys, or forgets anything."
+    description: "`true` when the plan replaces, destroys, or forgets anything not exempted by `ignore-risk`."
     value: ${{ steps.summary.outputs.has-risk }}
+  protected-destroy:
+    description: Number of protected resources to destroy.
+    value: ${{ steps.summary.outputs.protected-destroy }}
+  protected-replace:
+    description: Number of protected resources to replace.
+    value: ${{ steps.summary.outputs.protected-replace }}
+  has-critical-risk:
+    description: "`true` when the plan destroys or replaces a protected resource."
+    value: ${{ steps.summary.outputs.has-critical-risk }}
 
 runs:
   using: composite
@@ -85,16 +113,32 @@ runs:
         PR_NUMBER: ${{ inputs.pr-number }}
         PLAN_JSON: ${{ inputs.plan-json }}
         MARKER: ${{ inputs.marker }}
+        PROTECT: ${{ inputs.protect }}
+        IGNORE_RISK: ${{ inputs.ignore-risk }}
+        FAIL_ON: ${{ inputs.fail-on }}
       run: |
         set -euo pipefail
         summary="${RUNNER_TEMP}/tf-plan-summary.md"
         if [ -z "${PR_NUMBER}" ]; then
           echo "::warning title=tf-plan-summary::No pull request number available; rendering the summary without posting a comment."
         fi
-        # The CLI appends its step outputs to $GITHUB_OUTPUT itself.
-        "$(go env GOPATH)/bin/tf-plan-summary" \
-          --plan-json "${PLAN_JSON}" \
-          --marker "${MARKER}" \
-          --output "${summary}"
-        cat "${summary}" >> "${GITHUB_STEP_SUMMARY}"
-        cat "${summary}"
+        args=(--plan-json "${PLAN_JSON}" --marker "${MARKER}" --output "${summary}" --fail-on "${FAIL_ON}")
+        # One glob per line; blank lines and surrounding spaces are dropped.
+        while IFS= read -r glob; do
+          glob="$(printf '%s' "${glob}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+          if [ -n "${glob}" ]; then args+=(--protect "${glob}"); fi
+        done <<< "${PROTECT}"
+        while IFS= read -r glob; do
+          glob="$(printf '%s' "${glob}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+          if [ -n "${glob}" ]; then args+=(--ignore-risk "${glob}"); fi
+        done <<< "${IGNORE_RISK}"
+        # The CLI appends its step outputs to $GITHUB_OUTPUT itself. A tripped
+        # fail-on gate exits 2 after everything is written; the summary is
+        # still published before the step fails.
+        rc=0
+        "$(go env GOPATH)/bin/tf-plan-summary" "${args[@]}" || rc=$?
+        if [ -f "${summary}" ]; then
+          cat "${summary}" >> "${GITHUB_STEP_SUMMARY}"
+          cat "${summary}"
+        fi
+        exit "${rc}"

@@ -49,6 +49,12 @@ type ResourceChange struct {
 	// Deposed is set when the change applies to a deposed object (left over
 	// from a create_before_destroy replacement) rather than the current one.
 	Deposed bool
+	// ModuleAddress is the containing module instance (empty in the root
+	// module); it lets a policy pattern match the address inside the module.
+	ModuleAddress string
+	// Protected and RiskIgnored are set by Summary.Apply from a Policy.
+	Protected   bool
+	RiskIgnored bool
 }
 
 // Summary is the parsed plan grouped by action.
@@ -57,9 +63,50 @@ type Summary struct {
 	Counts  map[Action]int
 }
 
-// HasRisk reports whether the plan destroys, replaces, or forgets anything.
+// HasRisk reports whether the plan destroys, replaces, or forgets anything
+// that a policy has not exempted with --ignore-risk.
 func (s Summary) HasRisk() bool {
-	return s.Counts[Destroy] > 0 || s.Counts[Replace] > 0 || s.Counts[Forget] > 0
+	return s.RiskCount(Destroy)+s.RiskCount(Replace)+s.RiskCount(Forget) > 0
+}
+
+// RiskCount is the number of changes with action a that still count as risk:
+// the full count minus the changes a policy let out of the gate.
+func (s Summary) RiskCount(a Action) int {
+	n := s.Counts[a]
+	for _, c := range s.Changes {
+		if c.Action == a && c.RiskIgnored {
+			n--
+		}
+	}
+	return n
+}
+
+// RiskIgnored counts the risky changes a policy let out of the gate.
+func (s Summary) RiskIgnored() int {
+	n := 0
+	for _, c := range s.Changes {
+		if c.RiskIgnored {
+			n++
+		}
+	}
+	return n
+}
+
+// ProtectedCount is the number of protected resources with action a.
+func (s Summary) ProtectedCount(a Action) int {
+	n := 0
+	for _, c := range s.Changes {
+		if c.Action == a && c.Protected {
+			n++
+		}
+	}
+	return n
+}
+
+// HasCriticalRisk reports whether the plan destroys or replaces a protected
+// resource.
+func (s Summary) HasCriticalRisk() bool {
+	return s.ProtectedCount(Destroy)+s.ProtectedCount(Replace) > 0
 }
 
 // Total counts the changes that actually modify infrastructure or state
@@ -82,6 +129,10 @@ type Stats struct {
 	Read    int  `json:"read"`
 	Total   int  `json:"total"`
 	HasRisk bool `json:"has_risk"`
+
+	ProtectedDestroy int  `json:"protected_destroy"`
+	ProtectedReplace int  `json:"protected_replace"`
+	HasCriticalRisk  bool `json:"has_critical_risk"`
 }
 
 // Stats projects the summary into counts a workflow can gate on.
@@ -97,6 +148,10 @@ func (s Summary) Stats() Stats {
 		Read:    s.Counts[Read],
 		Total:   s.Total(),
 		HasRisk: s.HasRisk(),
+
+		ProtectedDestroy: s.ProtectedCount(Destroy),
+		ProtectedReplace: s.ProtectedCount(Replace),
+		HasCriticalRisk:  s.HasCriticalRisk(),
 	}
 }
 
@@ -111,11 +166,12 @@ type planFile struct {
 // Only attribute paths and the reason code are read besides the actions;
 // before/after values stay unparsed.
 type resourceChange struct {
-	Address      string `json:"address"`
-	Type         string `json:"type"`
-	ActionReason string `json:"action_reason"`
-	Deposed      string `json:"deposed"`
-	Change       struct {
+	Address       string `json:"address"`
+	ModuleAddress string `json:"module_address"`
+	Type          string `json:"type"`
+	ActionReason  string `json:"action_reason"`
+	Deposed       string `json:"deposed"`
+	Change        struct {
 		Actions      []string `json:"actions"`
 		ReplacePaths [][]any  `json:"replace_paths"`
 	} `json:"change"`
@@ -189,12 +245,13 @@ func Parse(data []byte) (Summary, error) {
 				continue
 			}
 			s.Changes = append(s.Changes, ResourceChange{
-				Address:      rc.Address,
-				Type:         rc.Type,
-				Action:       act,
-				Reason:       rc.ActionReason,
-				ReplacePaths: formatPaths(rc.Change.ReplacePaths),
-				Deposed:      rc.Deposed != "",
+				Address:       rc.Address,
+				Type:          rc.Type,
+				Action:        act,
+				Reason:        rc.ActionReason,
+				ReplacePaths:  formatPaths(rc.Change.ReplacePaths),
+				Deposed:       rc.Deposed != "",
+				ModuleAddress: rc.ModuleAddress,
 			})
 		}
 	}

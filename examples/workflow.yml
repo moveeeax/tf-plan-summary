@@ -29,6 +29,15 @@ jobs:
         with:
           plan-json: plan.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Optional policy: protected resources are pinned at the top of the
+          # comment, and fail-on: critical fails the job when one is destroyed
+          # or replaced (the comment is still posted).
+          # protect: |
+          #   aws_db_instance
+          #   module.data.*
+          # ignore-risk: |
+          #   null_resource
+          # fail-on: critical
 
       # Optional gate: fail the job when the plan replaces, destroys or forgets
       # anything, so a destructive plan cannot be merged unnoticed.

@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -165,6 +166,73 @@ func TestRunExplainsReplacements(t *testing.T) {
 	for _, sub := range []string{"| Why |", "forces replacement: `engine_version`, `identifier`", "tainted"} {
 		if !strings.Contains(out, sub) {
 			t.Errorf("output missing %q:\n%s", sub, out)
+		}
+	}
+}
+
+func TestRunPolicyOutputs(t *testing.T) {
+	ghOut := filepath.Join(t.TempDir(), "gh-output")
+	if _, err := run(t, "--plan-json", "../testdata/plan_modules.json", "-o", os.DevNull,
+		"--github-output", ghOut, "--protect", "aws_db_instance", "--protect", "module.network.*"); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	b, err := os.ReadFile(ghOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{"protected-destroy=1", "protected-replace=2", "has-critical-risk=true"} {
+		if !strings.Contains(string(b), line+"\n") {
+			t.Errorf("github output missing %q:\n%s", line, b)
+		}
+	}
+}
+
+func TestRunFailOn(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		fail bool
+	}{
+		{"default never fails", nil, false},
+		{"never", []string{"--fail-on", "never"}, false},
+		{"risk on a risky plan", []string{"--fail-on", "risk"}, true},
+		{"risk with every risky change exempt", []string{"--fail-on", "risk", "--ignore-risk", "module.*"}, false},
+		{"critical without protection", []string{"--fail-on", "critical"}, false},
+		{"critical with a protected replace", []string{"--fail-on", "critical", "--protect", "aws_db_instance"}, true},
+		{"critical with a protected forget only", []string{"--fail-on", "critical", "--protect", "module.legacy.*"}, false},
+	}
+	for _, c := range cases {
+		dir := t.TempDir()
+		md := filepath.Join(dir, "summary.md")
+		stats := filepath.Join(dir, "stats.json")
+		args := append([]string{"--plan-json", "../testdata/plan_modules.json", "-o", md, "--stats-json", stats}, c.args...)
+		_, err := run(t, args...)
+		var gate *GateError
+		if c.fail != errors.As(err, &gate) {
+			t.Errorf("%s: err = %v, want gate failure %v", c.name, err, c.fail)
+		}
+		if c.fail && (err == nil || !strings.Contains(err.Error(), "plan gate")) {
+			t.Errorf("%s: err = %v", c.name, err)
+		}
+		// The summary and the stats are written even when the gate trips.
+		for _, p := range []string{md, stats} {
+			if _, statErr := os.Stat(p); statErr != nil {
+				t.Errorf("%s: %s not written: %v", c.name, p, statErr)
+			}
+		}
+	}
+}
+
+func TestRunRejectsBadPolicyFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"--fail-on", "sometimes"},
+		{"--protect", ""},
+		{"--ignore-risk", " "},
+	} {
+		_, err := run(t, append([]string{"--plan-json", "../testdata/plan.json"}, args...)...)
+		var gate *GateError
+		if err == nil || errors.As(err, &gate) {
+			t.Errorf("%v: err = %v, want a usage error", args, err)
 		}
 	}
 }

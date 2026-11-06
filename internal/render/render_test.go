@@ -203,6 +203,94 @@ func TestMarkdownNoRiskNoCallout(t *testing.T) {
 	}
 }
 
+func protectedSample() plan.Summary {
+	return plan.Summary{
+		Changes: []plan.ResourceChange{
+			{Address: "aws_s3_bucket.logs", Type: "aws_s3_bucket", Action: plan.Create},
+			{Address: "null_resource.hook", Type: "null_resource", Action: plan.Replace, RiskIgnored: true},
+			{Address: "aws_instance.web", Type: "aws_instance", Action: plan.Destroy},
+			{Address: "aws_db_instance.main", Type: "aws_db_instance", Action: plan.Destroy, Protected: true},
+		},
+		Counts: map[plan.Action]int{plan.Create: 1, plan.Replace: 1, plan.Destroy: 2},
+	}
+}
+
+func TestMarkdownProtectedCallout(t *testing.T) {
+	md := Markdown(protectedSample(), DefaultMarker)
+	for _, sub := range []string{
+		"> [!CAUTION]\n> **Protected resources at risk:** 1 to destroy: `aws_db_instance.main`.",
+		// The exempt replacement drops out of the ordinary callout.
+		"**Review carefully:** 2 to destroy.",
+		"_1 risky change(s) exempted by `--ignore-risk`",
+		"| ± replace (exempt) | `null_resource.hook` |",
+	} {
+		if !strings.Contains(md, sub) {
+			t.Errorf("markdown missing %q\n---\n%s", sub, md)
+		}
+	}
+	// The protected row is pinned above every other row.
+	var rows []string
+	for _, line := range strings.Split(md, "\n") {
+		if strings.HasPrefix(line, "| ") && !strings.HasPrefix(line, "| Action") {
+			rows = append(rows, line)
+		}
+	}
+	if len(rows) != 4 || !strings.HasPrefix(rows[0], "| 🔒 - destroy | `aws_db_instance.main`") {
+		t.Errorf("protected row not pinned first: %q", rows)
+	}
+	if strings.Index(md, "[!CAUTION]") > strings.Index(md, "Review carefully") {
+		t.Error("protected callout should come before the ordinary one")
+	}
+}
+
+func TestMarkdownAllRiskExempt(t *testing.T) {
+	s := plan.Summary{
+		Changes: []plan.ResourceChange{{Address: "null_resource.hook", Type: "null_resource", Action: plan.Replace, RiskIgnored: true}},
+		Counts:  map[plan.Action]int{plan.Replace: 1},
+	}
+	md := Markdown(s, DefaultMarker)
+	if strings.Contains(md, "⚠️") || strings.Contains(md, "CAUTION") {
+		t.Errorf("exempt-only plan should not show a risk callout:\n%s", md)
+	}
+	if !strings.Contains(md, "**1** to replace") || !strings.Contains(md, "exempted") {
+		t.Errorf("exempt change must still be counted and disclosed:\n%s", md)
+	}
+}
+
+func TestMarkdownCalloutCapsProtectedAddresses(t *testing.T) {
+	s := plan.Summary{Counts: map[plan.Action]int{plan.Destroy: 12}}
+	for i := 0; i < 12; i++ {
+		s.Changes = append(s.Changes, plan.ResourceChange{
+			Address: fmt.Sprintf("aws_db_instance.db[%d]", i), Type: "aws_db_instance",
+			Action: plan.Destroy, Protected: true,
+		})
+	}
+	md := Markdown(s, DefaultMarker)
+	if !strings.Contains(md, "`aws_db_instance.db[9]` and 2 more.") {
+		t.Errorf("callout not capped:\n%s", md[:600])
+	}
+}
+
+// Truncation drops ordinary destroys before protected rows of any action.
+func TestMarkdownTruncationKeepsProtected(t *testing.T) {
+	s := plan.Summary{Counts: map[plan.Action]int{plan.Destroy: 4000, plan.Update: 1}}
+	for i := 0; i < 4000; i++ {
+		s.Changes = append(s.Changes, plan.ResourceChange{
+			Address: fmt.Sprintf("module.big.aws_s3_object.file[%d]", i), Type: "aws_s3_object", Action: plan.Destroy,
+		})
+	}
+	s.Changes = append(s.Changes, plan.ResourceChange{
+		Address: "aws_db_instance.critical", Type: "aws_db_instance", Action: plan.Update, Protected: true,
+	})
+	md := Markdown(s, DefaultMarker)
+	if len(md) > MaxBodyBytes {
+		t.Fatalf("rendered %d bytes, want <= %d", len(md), MaxBodyBytes)
+	}
+	if !strings.Contains(md, "| 🔒 ~ update | `aws_db_instance.critical`") {
+		t.Error("truncation dropped the protected row")
+	}
+}
+
 func TestMarkdownWhyColumn(t *testing.T) {
 	s := plan.Summary{
 		Changes: []plan.ResourceChange{
@@ -240,6 +328,14 @@ func TestMarkdownWhyColumn(t *testing.T) {
 	}
 }
 
+// Without anything to explain the table keeps its three columns.
+func TestMarkdownNoWhyColumnWithoutReasons(t *testing.T) {
+	md := Markdown(sample(), DefaultMarker)
+	if strings.Contains(md, "Why") {
+		t.Errorf("unexpected Why column:\n%s", md)
+	}
+}
+
 func TestMarkdownWhyCapsPaths(t *testing.T) {
 	paths := []string{"a", "b", "c", "d", "e", "f", "g"}
 	s := plan.Summary{
@@ -249,14 +345,6 @@ func TestMarkdownWhyCapsPaths(t *testing.T) {
 	md := Markdown(s, DefaultMarker)
 	if !strings.Contains(md, "`e` and 2 more |") || strings.Contains(md, "`f`") {
 		t.Errorf("paths not capped:\n%s", md)
-	}
-}
-
-// Without anything to explain the table keeps its three columns.
-func TestMarkdownNoWhyColumnWithoutReasons(t *testing.T) {
-	md := Markdown(sample(), DefaultMarker)
-	if strings.Contains(md, "Why") {
-		t.Errorf("unexpected Why column:\n%s", md)
 	}
 }
 
