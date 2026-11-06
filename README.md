@@ -19,10 +19,10 @@ plan, not a pile of stale ones.
 > ⚠️ Review carefully: 1 to replace, 1 to destroy.
 
 <details><summary>Details (5 resources)</summary>
-| Action | Resource | Type |
-| + create | aws_s3_bucket.assets | aws_s3_bucket |
-| ± replace | aws_instance.web | aws_instance |
-| - destroy | aws_db_instance.legacy | aws_db_instance |
+| Action | Resource | Type | Why |
+| + create | aws_s3_bucket.assets | aws_s3_bucket | |
+| ± replace | aws_instance.web | aws_instance | forces replacement: ami |
+| - destroy | aws_db_instance.legacy | aws_db_instance | removed from configuration |
 </details>
 ```
 
@@ -35,14 +35,19 @@ plan, not a pile of stale ones.
   ordering — is a replacement), ignoring `no-op` and `read`.
 - Renders counts, a collapsible details table, and a **risk callout** whenever the
   plan replaces, destroys, or forgets anything.
+- Says **why** each replace and destroy happens, in a "Why" column: the attribute
+  paths that force a replacement (`forces replacement: engine_version, identifier`)
+  or Terraform's reason code (`tainted`, `replace requested (-replace)`,
+  `removed from configuration`, `deposed object`, ...).
 - Emits machine-readable counts (`--stats-json`, `$GITHUB_OUTPUT`) so a workflow can
   gate on `has-risk` instead of grepping Markdown.
 
 It is deliberately conservative about under-reporting:
 
-- Only `address`, `type` and `actions` are read from the plan. Values,
-  `before`/`after` and `sensitive_values` are never parsed, so nothing from them
-  can end up in a PR comment.
+- Only `address`, `type`, `actions`, `action_reason`, `deposed` and the attribute
+  paths in `replace_paths` are read from the plan. Values, `before`/`after` and
+  `sensitive_values` are never parsed, so nothing from them can end up in a PR
+  comment.
 - An actions array it does not recognise is reported as `unclassified` rather than
   silently treated as a no-op.
 - Input that is not a plan document (a state file from `terraform show -json`, a

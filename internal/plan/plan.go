@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 )
 
 // Action is the effective change kind for a resource.
@@ -36,6 +39,16 @@ type ResourceChange struct {
 	Address string
 	Type    string
 	Action  Action
+	// Reason is Terraform's action_reason code (for example
+	// "replace_because_tainted"), empty when the plan gives none.
+	Reason string
+	// ReplacePaths are the attribute paths that forced a replacement, such as
+	// "engine_version" or "ebs_block_device[0].volume_size". They name
+	// attributes only; no value is ever read.
+	ReplacePaths []string
+	// Deposed is set when the change applies to a deposed object (left over
+	// from a create_before_destroy replacement) rather than the current one.
+	Deposed bool
 }
 
 // Summary is the parsed plan grouped by action.
@@ -95,11 +108,16 @@ type planFile struct {
 	PlannedValues   *json.RawMessage  `json:"planned_values"`
 }
 
+// Only attribute paths and the reason code are read besides the actions;
+// before/after values stay unparsed.
 type resourceChange struct {
-	Address string `json:"address"`
-	Type    string `json:"type"`
-	Change  struct {
-		Actions []string `json:"actions"`
+	Address      string `json:"address"`
+	Type         string `json:"type"`
+	ActionReason string `json:"action_reason"`
+	Deposed      string `json:"deposed"`
+	Change       struct {
+		Actions      []string `json:"actions"`
+		ReplacePaths [][]any  `json:"replace_paths"`
 	} `json:"change"`
 }
 
@@ -170,7 +188,14 @@ func Parse(data []byte) (Summary, error) {
 			if act == NoOp || act == Read {
 				continue
 			}
-			s.Changes = append(s.Changes, ResourceChange{Address: rc.Address, Type: rc.Type, Action: act})
+			s.Changes = append(s.Changes, ResourceChange{
+				Address:      rc.Address,
+				Type:         rc.Type,
+				Action:       act,
+				Reason:       rc.ActionReason,
+				ReplacePaths: formatPaths(rc.Change.ReplacePaths),
+				Deposed:      rc.Deposed != "",
+			})
 		}
 	}
 	sort.SliceStable(s.Changes, func(i, j int) bool {
@@ -189,4 +214,38 @@ func actionRank(a Action) int {
 		}
 	}
 	return len(Order)
+}
+
+var identifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
+
+// formatPaths renders replace_paths steps as Terraform-style attribute paths:
+// identifiers joined with dots, list indices and other keys in brackets. The
+// result is sorted and de-duplicated so the output is stable.
+func formatPaths(paths [][]any) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, steps := range paths {
+		var b strings.Builder
+		for _, step := range steps {
+			switch v := step.(type) {
+			case float64:
+				fmt.Fprintf(&b, "[%s]", strconv.FormatFloat(v, 'f', -1, 64))
+			case string:
+				if identifier.MatchString(v) {
+					if b.Len() > 0 {
+						b.WriteByte('.')
+					}
+					b.WriteString(v)
+				} else {
+					fmt.Fprintf(&b, "[%q]", v)
+				}
+			}
+		}
+		if p := b.String(); p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
